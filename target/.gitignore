@@ -1,0 +1,9 @@
+/.plxarc
+/archive-tmp
+/classes
+/generated-sources
+/maven-archiver
+/maven-shared-archive-resources
+/maven-status
+/surefire
+/test-classes
