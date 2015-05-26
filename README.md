@@ -1,5 +1,5 @@
 # Log Processing and Analytics
-### Because Logs needs attention in real time.
+### Because logs need attention in real time.
 
 ### Topology
 
