@@ -1,5 +1,5 @@
-# log-stream
-Log Processing and Analytics
+# Log Processing and Analytics
+### Because Logs needs attention in real time.
 
 ### Topology
 
