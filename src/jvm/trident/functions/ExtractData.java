@@ -38,7 +38,7 @@ public class ExtractData  extends BaseFunction {
         Matcher matcher = this.apacheAccessLogPattern.matcher(logEntryLine);
 
         if (!matcher.matches() || matcher.groupCount() < 7){
-            System.err.println("ERROR no match:" + logEntryLine);
+            //System.err.println("ERROR no match:" + logEntryLine);
             return;
         }
 

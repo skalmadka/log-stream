@@ -13,9 +13,8 @@ import com.github.fhuss.storm.elasticsearch.state.ESIndexUpdater;
 import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.json.simple.JSONObject;
-import storm.kafka.BrokerHosts;
-import storm.kafka.StringScheme;
-import storm.kafka.ZkHosts;
+import storm.kafka.*;
+import storm.kafka.trident.GlobalPartitionInformation;
 import storm.kafka.trident.OpaqueTridentKafkaSpout;
 import storm.kafka.trident.TridentKafkaConfig;
 import storm.trident.TridentState;
@@ -23,6 +22,7 @@ import storm.trident.TridentTopology;
 import storm.trident.state.StateFactory;
 import trident.common.ConfigReader;
 import trident.filters.PrintFilter;
+import trident.filters.RedisCounter;
 import trident.functions.ExtractData;
 import trident.functions.PrepareForElasticSearch;
 import trident.functions.SplitFunction;
@@ -39,6 +39,7 @@ public class LogStreamTopology {
         //Kafka Spout
         BrokerHosts zk = new ZkHosts(conf.get(ConfigConstants.KAFKA_CONSUMER_HOST_NAME) + ":" +conf.get(ConfigConstants.KAFKA_CONSUMER_HOST_PORT));
         TridentKafkaConfig kafkaConfig = new TridentKafkaConfig(zk, (String) conf.get(ConfigConstants.KAFKA_TOPIC_NAME));
+        kafkaConfig.fetchSizeBytes  = 4000000;
         kafkaConfig.scheme = new SchemeAsMultiScheme(new StringScheme());
         //kafkaConfig.ignoreZkOffsets=true;
         OpaqueTridentKafkaSpout spout = new OpaqueTridentKafkaSpout(kafkaConfig);
@@ -52,9 +53,13 @@ public class LogStreamTopology {
         TridentState esStaticState = topology.newStaticState(esStateFactory);
 
         //Topology
-        topology.newStream("commonLogKafkaSpout", spout).parallelismHint(2).name("commonLogKafkaSpout")
+        topology.newStream("commonLogKafkaSpout", spout).parallelismHint(3).name("commonLogKafkaSpout")
+                 //A Complex Reg-Ex
                 .each(new Fields("str"), new ExtractData(), new Fields("logJson")).parallelismHint(2).name("ExtractData")
-                .each(new Fields("timestamp", "logJson"), new PrepareForElasticSearch(), new Fields("index", "type", "id", "source")).parallelismHint(2).name("PrepareForElasticSearch")
+                //Some Redis Operation
+                //.each(new Fields("logJson"), new RedisCounter()).parallelismHint(2).name("RedisCounter")
+                // Load to Elasticsearch
+                .each(new Fields("logJson"), new PrepareForElasticSearch(), new Fields("index", "type", "id", "source")).parallelismHint(2).name("PrepareForElasticSearch")
                 .partitionPersist(esStateFactory, new Fields("index", "type", "id", "source"), new ESIndexUpdater<String>(new ESTridentTupleMapper())).parallelismHint(2)
                 ;
 
@@ -63,7 +68,7 @@ public class LogStreamTopology {
 
     public static void main(String[] args) throws Exception {
 
-        if(args.length != 2){
+        if(args.length < 1){
             System.err.println("[ERROR] Configuration File Required");
         }
         Config conf = new Config();
@@ -72,14 +77,11 @@ public class LogStreamTopology {
         conf.putAll(ConfigReader.readConfigFile(args[0]));
 
         //Second arg should be local in order to run locally
-        if(args[1].equals("local"))
-        {
-            LocalCluster localcluster = new LocalCluster();
-            localcluster.submitTopology("log_stream",conf,buildTopology(conf));
-        }
-        else
-        {
+        if(args.length  < 2 || (args.length  == 2 && !args[1].equals("local"))) {
             StormSubmitter.submitTopologyWithProgressBar("log_stream", conf, buildTopology(conf));
+        } else {
+            LocalCluster localcluster = new LocalCluster();
+            localcluster.submitTopology("log_stream", conf, buildTopology(conf));
         }
     }
 

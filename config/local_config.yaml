@@ -5,9 +5,11 @@ drpc.host.name: "localhost"
 drpc.host.port: 3772
 
 #Topology
-topology.workers: 4
-topology.max.spout.pending: 20
-topology.message.timeout.secs: 120
+topology.workers: 6
+topology.debug: false
+topology.max.spout.pending: 5
+topology.message.timeout.secs: 90
+topology.trident.batch.emit.interval.millis: 500
 
 #Elasticsearch
 elasticsearch.cluster.name: "elasticsearch"
@@ -23,3 +25,7 @@ kafka.consumer.host.port: 2181
 #Kafka URL Producer
 kafka.producer.host.name: "localhost"
 kafka.producer.host.port: 9092
+
+#Redis
+redis.host.name: "localhost"
+redis.host.port: 6379
