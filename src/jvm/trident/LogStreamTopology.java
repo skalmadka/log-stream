@@ -8,8 +8,14 @@ import backtype.storm.generated.StormTopology;
 import backtype.storm.spout.SchemeAsMultiScheme;
 import backtype.storm.tuple.Fields;
 import com.github.fhuss.storm.elasticsearch.ClientFactory;
+import com.github.fhuss.storm.elasticsearch.mapper.TridentTupleMapper;
 import com.github.fhuss.storm.elasticsearch.state.ESIndexState;
 import com.github.fhuss.storm.elasticsearch.state.ESIndexUpdater;
+import org.apache.storm.redis.common.config.JedisPoolConfig;
+import org.apache.storm.redis.common.mapper.TupleMapper;
+import org.apache.storm.redis.trident.state.RedisMapState;
+import org.apache.storm.redis.trident.state.RedisState;
+import org.apache.storm.redis.trident.state.RedisStateUpdater;
 import org.elasticsearch.common.settings.ImmutableSettings;
 import org.elasticsearch.common.settings.Settings;
 import org.json.simple.JSONObject;
@@ -17,17 +23,25 @@ import storm.kafka.*;
 import storm.kafka.trident.GlobalPartitionInformation;
 import storm.kafka.trident.OpaqueTridentKafkaSpout;
 import storm.kafka.trident.TridentKafkaConfig;
+import storm.trident.Stream;
 import storm.trident.TridentState;
 import storm.trident.TridentTopology;
+import storm.trident.operation.builtin.Count;
+import storm.trident.operation.builtin.Sum;
 import storm.trident.state.StateFactory;
 import trident.common.ConfigReader;
 import trident.filters.PrintFilter;
 import trident.filters.RedisCounter;
 import trident.functions.ExtractData;
+import trident.functions.ExtractHostName;
 import trident.functions.PrepareForElasticSearch;
 import trident.functions.SplitFunction;
+import trident.states.CustomAgg;
 import trident.states.ESIndexStateCustom;
 import trident.states.ESTridentTupleMapper;
+import trident.states.RedisTridentTupleMapper;
+
+import java.net.InetSocketAddress;
 
 /**
  * Created by Sunil Kalmadka
@@ -39,7 +53,7 @@ public class LogStreamTopology {
         //Kafka Spout
         BrokerHosts zk = new ZkHosts(conf.get(ConfigConstants.KAFKA_CONSUMER_HOST_NAME) + ":" +conf.get(ConfigConstants.KAFKA_CONSUMER_HOST_PORT));
         TridentKafkaConfig kafkaConfig = new TridentKafkaConfig(zk, (String) conf.get(ConfigConstants.KAFKA_TOPIC_NAME));
-        kafkaConfig.fetchSizeBytes  = 4000000;
+        //kafkaConfig.fetchSizeBytes  = 4000000;
         kafkaConfig.scheme = new SchemeAsMultiScheme(new StringScheme());
         //kafkaConfig.ignoreZkOffsets=true;
         OpaqueTridentKafkaSpout spout = new OpaqueTridentKafkaSpout(kafkaConfig);
@@ -52,15 +66,31 @@ public class LogStreamTopology {
         StateFactory esStateFactory = new ESIndexState.Factory<JSONObject>(new ClientFactory.NodeClient(esSettings.getAsMap()), JSONObject.class);
         TridentState esStaticState = topology.newStaticState(esStateFactory);
 
+        //Redis Persistent State
+        JedisPoolConfig poolConfig = new JedisPoolConfig.Builder()
+                .setHost((String) conf.get(ConfigConstants.REDIS_HOST_NAME))
+                .setPort((Integer) conf.get(ConfigConstants.REDIS_HOST_PORT))
+                .build();
+        //TupleMapper tupleMapper = new RedisTridentTupleMapper();
+        StateFactory redisStateFactory = RedisMapState.nonTransactional(poolConfig);
+
         //Topology
-        topology.newStream("commonLogKafkaSpout", spout).parallelismHint(3).name("commonLogKafkaSpout")
-                 //A Complex Reg-Ex
-                .each(new Fields("str"), new ExtractData(), new Fields("logJson")).parallelismHint(2).name("ExtractData")
-                //Some Redis Operation
-                //.each(new Fields("logJson"), new RedisCounter()).parallelismHint(2).name("RedisCounter")
+        Stream extractDataStream =
+                topology.newStream("commonLogKafkaSpout", spout).parallelismHint(2).name("commonLogKafkaSpout")
+                //Reg-Ex
+                .each(new Fields("str"), new ExtractData(), new Fields("logJson")).parallelismHint(4).name("ExtractData");
+
+        TridentState loadElasticSearchState =
+                extractDataStream.each(new Fields("logJson"), new PrepareForElasticSearch(), new Fields("index", "type", "id", "source")).parallelismHint(4).name("PrepareForElasticSearch")
                 // Load to Elasticsearch
-                .each(new Fields("logJson"), new PrepareForElasticSearch(), new Fields("index", "type", "id", "source")).parallelismHint(2).name("PrepareForElasticSearch")
-                .partitionPersist(esStateFactory, new Fields("index", "type", "id", "source"), new ESIndexUpdater<String>(new ESTridentTupleMapper())).parallelismHint(2)
+                .partitionPersist(esStateFactory, new Fields("index", "type", "id", "source"), new ESIndexUpdater<String>(new ESTridentTupleMapper())).parallelismHint(4)
+                ;
+
+        TridentState loadRedis =
+                extractDataStream.each(new Fields("logJson"), new ExtractHostName(), new Fields("hostname"))
+                .groupBy(new Fields("hostname"))
+                 //Custom Aggregation Function. Currently counting.
+                .persistentAggregate(redisStateFactory, new CustomAgg(), new Fields("count"));
                 ;
 
         return topology.build();
